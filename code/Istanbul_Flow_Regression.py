@@ -38,7 +38,7 @@ def normalise_data(df,omit=[]):
     return df2
 
 #helper to read raw credit card data , repeat means we consider more than one trip by a user
-def read_raw_flows(is_repeat):
+def read_raw_flows(is_repeat,omit=True):
     print("Reading transcation data...\n")
     df_trans = pd.read_csv('../data/istanbul/0-transactions.txt')
     
@@ -76,12 +76,12 @@ def read_raw_flows(is_repeat):
     df_trans['sdistrict_id'] = df_trans.sdistrict_id.astype(int)
     df_trans['hdistrict_id'] = df_trans.hdistrict_id.astype(int)
     
-    
-    df_trans = df_trans[~(df_trans.sdistrict_id.isin(EXCLUDE)|df_trans.hdistrict_id.isin(EXCLUDE))]
+    if omit:
+        df_trans = df_trans[~(df_trans.sdistrict_id.isin(EXCLUDE)|df_trans.hdistrict_id.isin(EXCLUDE))]
     return df_trans
 
-def population_representation():
-    df = read_raw_flows(False)
+def population_representation(omit=True):
+    df = read_raw_flows(False,omit)
     population_rep = df.groupby('hdistrict_id')['customer_id'].nunique().rename('pop_rep')
     population_rep.index.rename('district_id',inplace=True)
     return population_rep
@@ -240,7 +240,7 @@ def read_availablity_diversity():
     df=pd.merge(df,df2,how="left",on="shop_id")
     df.drop_duplicates(subset = ['shop_id'],inplace=True)
     #merged categories that is more general
-    df_div=compute_all_diversity(df,'sdistrict_id','mcc_merged',',mcc_merged')
+    df_div=compute_all_diversity(df,'sdistrict_id','mcc_merged','mcc_merged')
     df_div=df_div.join(compute_all_diversity(df,'sdistrict_id','mcc_detailed','mcc_detailed'),on='district_id',how='left')
     df_div.to_csv('../data/istanbul/shopavaildiversity.csv')
     return df_div
@@ -319,11 +319,12 @@ def buildSimpleNetwork(df):
 
 
     
-def read_population():
+def read_population(omit=True):
     pop = pd.read_csv('../data/istanbul/population.csv')
     pop.rename(columns ={'ID':'district_id','Population 2015':'population'},inplace=True)
     pop = pop[['district_id','population']]
-    pop = pop[~pop.district_id.isin(EXCLUDE)]
+    if omit:
+        pop = pop[~pop.district_id.isin(EXCLUDE)]
     pop.index = pop.district_id
     pop.drop(columns=['district_id'],inplace=True)
     return pop
@@ -424,12 +425,12 @@ class Result(object):
     def save_plot(self,fig_name):
         plot_location = '../results/{}/plots'.format(self.name)
         create_dir(plot_location)
-        plt.savefig(os.path.join(plot_location,'scatter_{}'.format(fig_name)),dpi=300)
+        plt.savefig(os.path.join(plot_location,'{}'.format(fig_name)),dpi=300)
     
     def get_corr(self,df,x,y):
         return df[[x, y]].corr()[y][x]
     
-    def plot_result(self,df,x,y,controls=None,x_lab=None,y_lab=None,has_best_fit=False):
+    def plot_scatter(self,df,x,y,x_lab=None,y_lab=None,has_best_fit=False,controls=None):
         plt.figure()
         if not x_lab:
             x_lab = x
@@ -443,7 +444,9 @@ class Result(object):
         plt.ylabel(y_lab,size=15)
         if has_best_fit:
             plt.plot(np.unique(df[x].values), np.poly1d(np.polyfit(df[x].values, df[y].values, 1))(np.unique(df[x].values)))
+        plt.tight_layout()
         self.save_plot('{}_{}.png'.format(x,y))
+        
         return corr
     def plot_map(self,df,col,name):
         state_geo = '../data/istanbul/district_level_shape/district.geojson'
@@ -496,7 +499,9 @@ class CommoditiesAndFlow(Result):
         
         for x in xs:
             for y in ys:
-                corr=self.plot_result(self.df['istanbul'],x,y)
+                print (x)
+                print (y)
+                corr=self.plot_scatter(self.df['istanbul'],x,y)
                 df=df.append({'x':x,'y':y,'correlation':corr},ignore_index=True)
         df.sort_values('correlation',ascending=False,inplace=True)
         loc = '../results/{}'.format(self.name)
@@ -535,7 +540,7 @@ class FlowAndEconomicOutput(Result):
         df = pd.DataFrame()
         for x in xs:
             for y in ys:
-                corr=self.plot_result(self.df['istanbul'],x,y,x_lab,y_lab,has_best_fit=True)
+                corr=self.plot_scatter(self.df['istanbul'],x,y,x_lab,y_lab,has_best_fit=True)
                 df=df.append({'x':x,'y':y,'correlation':corr},ignore_index=True)
         df.sort_values('correlation',ascending=False,inplace=True)
         loc = '../results/{}'.format(self.name)
@@ -787,7 +792,7 @@ class HuffModel(Result):
         
         self.plot_heatmap(matrix,'PuBu',df_info.district_name.values,df_info.district_name.values,'log(Flow)','flow')
 # =============================================================================
-#         sns.heatmap(df_diverse.mcc_detailed.values.reshape(39,1),cmap='PuBu',cbar_kws = dict(use_gridspec=False,location="top"))
+#  |       sns.heatmap(df_diverse.mcc_detailed.values.reshape(39,1),cmap='PuBu',cbar_kws = dict(use_gridspec=False,location="top"))
 # =============================================================================
 
 class Supplementary(Result):
@@ -795,25 +800,33 @@ class Supplementary(Result):
 
     def __init__(self):
         self.df ={}
-        self.df['pop'] = read_population()
-        self.df['rep'] = population_representation()   
-        self.df['area']= read_areas()
-
-    def compare_pop(self):
+        self.df['pop'] = read_population(omit=False)
+        self.df['rep'] = population_representation(omit=False)   
+        self.df['area']= read_areas() 
+        df = read_population(omit=True)
+        df = pd.merge(df,self.df['area'][['district_id','district_name']],on='district_id',how='left')
+        df.sort_values(by='district_id',inplace=True)
+        self.df['pop_36'] = df
+    def get_population_plots(self):
         df = self.df['pop'].join(self.df['rep'],how='left')
         df['district_id'] = df.index
         self.plot_map(df,'population','population')
         self.plot_map(df,'pop_rep','samples')
-        self.plot_result(df,'pop_rep','population','Sample Size','Population Size',has_best_fit=True)
-    
-    def plot_areas(self):
+        self.plot_scatter(df,'pop_rep','population','Sample Size','Population Size',has_best_fit=True)
+        
+        df = self.df['pop_36']
+        self.plot_bar(df, 'population', df.district_name.values, 'population')
+        
+    def get_area_plots(self):
         df = self.df['area']
         self.plot_map(df,'area_km2','area')
         self.plot_bar(df,'area_km2',df.district_name,'area')
         
+        
+        
     def run_for_results(self):
-        self.compare_pop()
-        self.plot_areas()
+        self.get_population_plots()
+        self.get_area_plots()
 
 results=[]
 

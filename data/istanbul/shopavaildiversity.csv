@@ -1,4 +1,4 @@
-district_id,",mcc_merged_entropy",",mcc_merged_num_unique",",mcc_merged_total",mcc_detailed_entropy,mcc_detailed_num_unique,mcc_detailed_total
+district_id,mcc_merged_entropy,mcc_merged_num_unique,mcc_merged_total,mcc_detailed_entropy,mcc_detailed_num_unique,mcc_detailed_total
 2,2.4478862402877892,20,712,3.4188516158389555,60,712
 4,2.577364632398706,21,1570,3.615067968092645,90,1570
 9,2.6301945415894026,20,519,3.500270752836716,64,519
