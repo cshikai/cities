@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SAGA_METADATA>
+  <HISTORY saga-version="2.1.4">
+    <MODULE library="shapes_points" id="10" name="Add Polygon Attributes to Points">
+      <OPTION type="table_fields" id="FIELDS" name="Attributes">0</OPTION>
+      <INPUT type="shapes" id="INPUT" name="Points">
+        <FILE>/var/folders/kg/58xs9nrj4jv80jnhf1rhdmwm0000gn/T/processing/d67cbd865ff7420fbcf89d0dff298df0/meituanidgps.shp</FILE>
+      </INPUT>
+      <INPUT type="shapes" id="POLYGONS" name="Polygons">
+        <FILE>/Users/wen/Dropbox (MIT)/beijing_share/data/beijing_district/Beijing_new_3_WGS1984_01_towns_final/Beijing_new_3_WGS1984_01_towns.shp</FILE>
+      </INPUT>
+      <OUTPUT type="shapes" id="OUTPUT" name="Result">meituanidgps [Beijing_new_3_WGS1984_01_towns]</OUTPUT>
+    </MODULE>
+  </HISTORY>
+  <SOURCE>
+    <FILE>/Users/wen/Dropbox (MIT)/beijing_share/data/beijing_district/Beijing_new_3_WGS1984_01_towns_final/meituan2district.shp</FILE>
+    <DATABASE></DATABASE>
+    <PROJECTION>
+      <OGC_WKT>GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["Degree",0.017453292519943295]]</OGC_WKT>
+      <PROJ4>+proj=longlat +a=6378137.000000 +b=6356752.314245 +no_defs</PROJ4>
+      <EPSG>-1</EPSG>
+    </PROJECTION>
+  </SOURCE>
+  <DESCRIPTION></DESCRIPTION>
+</SAGA_METADATA>
