@@ -329,11 +329,14 @@ def read_population(omit=True):
     pop.drop(columns=['district_id'],inplace=True)
     return pop
 
-def get_population_density():
-    pop = read_population()
+def get_population_density(omit):
+    pop = read_population(omit)
     df = pd.read_csv('../data/istanbul/Istanbul_district_area.txt')
-    df.rename(columns={' area_km2':'area'},inplace=True)
-    df2 = df.join(pop,df,on='district_id',how='left')
+    df.rename(columns={'area_km2':'area'},inplace=True)
+    
+    df2 = df.join(pop,on='district_id',how='left')
+    if omit:
+        df2 = df2[~df2.district_id.isin(EXCLUDE)]
     df2['popdse']=df2.population/df2.area
     return df2
 def read_gdp():
@@ -371,25 +374,29 @@ class Result(object):
         print(res.summary())
     
     def write_regressions_summary(self,reses,y):
-        dfoutput = summary_col(reses,stars=True)
+        info_dict = {'N':lambda x: "{0:d}".format(int(x.nobs)),
+                     'R2':lambda x: "{:.2f}".format(x.rsquared),
+                     'Adjusted R2':lambda x: "{:.2f}".format(x.rsquared_adj)}       
+        dfoutput = summary_col(reses,stars=True,info_dict=info_dict)
         result_location = '../results/{}/regressions'.format(self.name)
         create_dir(result_location)
         self.reg_table = dfoutput
         with open(os.path.join(result_location,'{}.tex'.format('{}_regression_summary_table'.format(y))), 'w') as f:
             f.write(dfoutput.as_latex())
     
-    def plot_bar(self,df,col,ticks,name_suffix):
+    def plot_bar(self,df,col,ticks,y_lab,name_suffix):
         colors = ['#EF476F','#00CFC1','#086788','#FF9F1C','#EB5E28']
         color = colors[df.columns.get_loc(col)%len(colors)]
-
+        
+        
         y_pos = np.arange(len(ticks))
         values = df[col].values
         
         plt.figure()
         plt.bar(y_pos, values, align='center', alpha=0.5,color=color)
         plt.xticks(y_pos, ticks, rotation=270)
-        plt.ylabel('Counts')
-        plt.title('{} Distribution'.format(col))
+        plt.ylabel(y_lab)
+
         plt.tight_layout()
         self.save_plot('bar_{}.png'.format(name_suffix))
     
@@ -448,7 +455,7 @@ class Result(object):
         self.save_plot('{}_{}.png'.format(x,y))
         
         return corr
-    def plot_map(self,df,col,name):
+    def plot_map(self,df,col,legend_string,name):
         state_geo = '../data/istanbul/district_level_shape/district.geojson'
     #==============================================================================
     #     state_geo = 'td/bj_shapefile/bj_shapefile.geojson'
@@ -473,7 +480,7 @@ class Result(object):
          fill_color='PuBu',
          fill_opacity=0.7,
          line_opacity=0.2,
-         legend_name='Value'
+         legend_name=legend_string
         )
         mapbg.add_to(m)
         # Save to html
@@ -551,6 +558,7 @@ class FlowAndEconomicOutput(Result):
         cols = ['inflow','outflow','withinflow','population']
         combinations = [(0,1,),(0,1,2),(0,1,3),(0,1,2,3)]
         ys = ['y2014','y2015','y2016']
+        ys = ys + ['log_{}'.format(y_string) for y_string in ys]
         for y in ys:
             self.run_regressions(df_index,cols,combinations,y)
         
@@ -758,7 +766,8 @@ class HuffModel(Result):
         for o in omit:
             cols.remove(o)
         for col in cols:
-            self.plot_bar(self.poi,col,self.poi.district_name,col)
+            y_lab = 'Counts'    
+            self.plot_bar(self.poi,col,self.poi.district_name,'{} {}'.format(col,y_lab),col)
 
         
     def plot_distance_heatmap(self):
@@ -803,24 +812,25 @@ class Supplementary(Result):
         self.df['pop'] = read_population(omit=False)
         self.df['rep'] = population_representation(omit=False)   
         self.df['area']= read_areas() 
-        df = read_population(omit=True)
-        df = pd.merge(df,self.df['area'][['district_id','district_name']],on='district_id',how='left')
+        df = get_population_density(omit=True)
+        df = pd.merge(df,self.df['area'][['district_id']],on='district_id',how='left')
         df.sort_values(by='district_id',inplace=True)
         self.df['pop_36'] = df
     def get_population_plots(self):
         df = self.df['pop'].join(self.df['rep'],how='left')
         df['district_id'] = df.index
-        self.plot_map(df,'population','population')
-        self.plot_map(df,'pop_rep','samples')
+        self.plot_map(df,'population','Population (in thousands)','population')
+        self.plot_map(df,'pop_rep','Sample counts','sample')
         self.plot_scatter(df,'pop_rep','population','Sample Size','Population Size',has_best_fit=True)
         
         df = self.df['pop_36']
-        self.plot_bar(df, 'population', df.district_name.values, 'population')
+        self.plot_bar(df, 'population', df.district_name.values,'Population (in thousands)','population')
+        self.plot_bar(df, 'popdse', df.district_name.values,'Density (in thousands/km2)','population_density')
         
     def get_area_plots(self):
         df = self.df['area']
-        self.plot_map(df,'area_km2','area')
-        self.plot_bar(df,'area_km2',df.district_name,'area')
+        self.plot_map(df,'area_km2','Area (in km2)', 'area')
+        self.plot_bar(df,'area_km2',df.district_name,'Area (in km2)','area')
         
         
         
@@ -831,8 +841,12 @@ class Supplementary(Result):
 results=[]
 
 results.append(Supplementary())
-results.append(HuffModel())
-results.append(CommoditiesAndFlow())
+# =============================================================================
+# results.append(HuffModel())
+# =============================================================================
+# =============================================================================
+# results.append(CommoditiesAndFlow())
+# =============================================================================
 results.append(FlowAndEconomicOutput())
 
 for result in results:
