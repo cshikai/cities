@@ -872,15 +872,6 @@ def addAverageIncome():
     
 
 
-def getPopulation():
-    df=pd.read_csv('bj_pop.csv')[['districtID','Popu','Popu_float','Pop_Sum','Dens_Pob']]
-    df.rename(columns={'districtID':'district_id','Pop_Sum':'pop','Popu_float':'popfloat','Popu':'popres'},inplace=True)
-    df2=pd.read_csv('td/bj_house_price.csv')
-    df2.rename(columns={'districtID':'district_id',u'Mean House Price (MHP)':'HPI'},inplace=True)
-    df=pd.merge(df,df2[['district_id','HPI']],on='district_id',how='left')
-    df['pop']=df['pop']/1000
-    return df
-
 def generateConsumptionDataWithControls():
     df=pd.read_csv('beijing_consumption.csv',sep='\t')
     df.rename(columns={'districtID':'district_id'},inplace=True)

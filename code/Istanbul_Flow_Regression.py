@@ -384,7 +384,7 @@ class Result(object):
         with open(os.path.join(result_location,'{}.tex'.format('{}_regression_summary_table'.format(y))), 'w') as f:
             f.write(dfoutput.as_latex())
     
-    def plot_bar(self,df,col,ticks,y_lab,name_suffix):
+    def plot_bar(self,df,col,ticks,title,name_suffix):
         colors = ['#EF476F','#00CFC1','#086788','#FF9F1C','#EB5E28']
         color = colors[df.columns.get_loc(col)%len(colors)]
         
@@ -395,8 +395,10 @@ class Result(object):
         plt.figure()
         plt.bar(y_pos, values, align='center', alpha=0.5,color=color)
         plt.xticks(y_pos, ticks, rotation=270)
-        plt.ylabel(y_lab)
-
+# =============================================================================
+#         plt.ylabel(y_lab)
+# =============================================================================
+        plt.title(title)
         plt.tight_layout()
         self.save_plot('bar_{}.png'.format(name_suffix))
     
@@ -418,6 +420,22 @@ class Result(object):
             reses.append(self.regress(df,xs,y))
         self.write_regressions_summary(reses,y)
             
+        
+    def run_glm(self,df,xs,y,family,f_name=None):
+        if family =='gaussian':
+            fam = sm.families.Gaussian()
+        x_string='+'.join(xs)
+        model = smf.glm('{} ~ {}'.format(y,x_string), data=df,family=fam)
+        result = model.fit()
+
+        if not f_name:
+            f_name = 'glm_{}_{}_{}'.format(family,y,x_string) 
+        self.write_regression_result(result,f_name)
+        
+        self.plot_residuals(df[y].values,result.fittedvalues,y,f_name=f_name)
+        return result
+        
+        
     def regress(self,df,xs,y,f_name=None):
 
         x_string='+'.join(xs)
@@ -428,7 +446,7 @@ class Result(object):
             f_name = '{}_{}'.format(y,x_string) 
         self.write_regression_result(res,f_name)
         
-        self.plot_residuals(df[y].values,res.fittedvalues,y,f_name='resid_{}'.format(f_name))
+        self.plot_residuals(df[y].values,res.fittedvalues,y,f_name='{}'.format(f_name))
         return res
     
     def plot_residuals(self,y,y_fitted,y_name,f_name):
@@ -437,7 +455,8 @@ class Result(object):
         df.loc[:,'errors'] =  y - y_fitted
         df.loc[:,'y'] = y
         df.loc[:,'y_fitted'] = y_fitted
-        self.plot_scatter(df,'y_fitted','errors',x_lab ='Fitted {}'.format(y_name),y_lab='residuals',f_name=f_name)
+        y_name = 'Values'
+        self.plot_scatter(df,'y_fitted','errors',x_lab ='Fitted {}'.format(y_name),y_lab='Residuals',f_name='resid_{}'.format(f_name))
         
                 
     def save_plot(self,fig_name):
@@ -448,7 +467,7 @@ class Result(object):
     def get_corr(self,df,x,y):
         return df[[x, y]].corr()[y][x]
     
-    def plot_scatter(self,df,x,y,x_lab=None,y_lab=None,has_best_fit=False,controls=None,f_name=None):
+    def plot_scatter(self,df,x,y,x_lab=None,y_lab=None,has_best_fit=False,controls=None,f_name=None,**kwargs):
         if not f_name:
             f_name = '{}_{}.png'.format(x,y)
         plt.figure()
@@ -463,7 +482,13 @@ class Result(object):
         plt.ylabel(y_lab,size=15)
         if has_best_fit:
             corr=self.get_corr(df,x,y)
-            plt.text(df[x].mean(),df[y].mean(),'Correlation : {}'.format(corr),size=15)
+            if 'corr_loc' not in kwargs:
+                corr_loc_x = df[x].mean()
+                corr_loc_y = df[y].mean()
+            else:
+                corr_loc_x = kwargs['corr_loc'][0]
+                corr_loc_y = kwargs['corr_loc'][1]
+            plt.text(corr_loc_x,corr_loc_y,'Correlation : {}'.format(corr),size=15)
             plt.plot(np.unique(df[x].values), np.poly1d(np.polyfit(df[x].values, df[y].values, 1))(np.unique(df[x].values)))
         else:
             corr=0
@@ -472,33 +497,45 @@ class Result(object):
         
         return corr
     def plot_map(self,df,col,legend_string,name):
-        state_geo = '../data/istanbul/district_level_shape/district.geojson'
-    #==============================================================================
-    #     state_geo = 'td/bj_shapefile/bj_shapefile.geojson'
-    #==============================================================================
         # Initialize the map:
-        locs = [[41.0082, 28.9784]]
-        m = folium.Map(location=locs[0], zoom_start=10,tiles='cartodbpositron')
+        if 'beijing' in self.name:
+            state_geo = '../data/beijing/bj_shapefile/bj_shapefile.geojson'
+            loc = [39.9042, 116.4074]
+            district_id_col='districtID'
+            
+            
+        else:
+            
+            state_geo = '../data/istanbul/district_level_shape/district.geojson'
+            loc = [41.0082, 28.9784]
+            district_id_col='districtid'
+            style_function = lambda x: {'fillOpacity': 1 if       
+                                x['properties'][district_id_col]==0 else
+                                 0, 'fillColor' : "#000000",'stroke': False }
+            mapbg=folium.GeoJson(state_geo,style_function)
+        
+
+        m = folium.Map(location=loc, zoom_start=10,tiles='cartodbpositron')
          
         # Add the color for the chloropleth:
-        style_function = lambda x: {'fillOpacity': 1 if       
-                                x['properties']['districtid']==0 else
-                                 0, 'fillColor' : "#000000",'stroke': False }
+
     
-        mapbg=folium.GeoJson(state_geo,style_function)
+
         
         m.choropleth(
          geo_data=state_geo,
          name='choropleth',
          data=df,
          columns=['district_id',col],
-         key_on='feature.properties.districtid',
-         fill_color='PuBu',
+         key_on='feature.properties.{}'.format(district_id_col),
+         fill_color='YlGnBu',
          fill_opacity=0.7,
          line_opacity=0.2,
          legend_name=legend_string
         )
-        mapbg.add_to(m)
+        if 'beijing' not in self.name:
+            
+            mapbg.add_to(m)
         # Save to html
         location = '../results/{}/maps'.format(self.name)
         create_dir(location)
@@ -532,6 +569,8 @@ class CommoditiesAndFlow(Result):
         
     def run_for_results(self):
         self.plot_results()
+        
+        
 class FlowAndEconomicOutput(Result):
     name = 'flow_and_econ'
     
@@ -723,10 +762,29 @@ class HuffModel(Result):
         self.plot_poi_bars()
         self.plot_flow_heatmap()
         self.plot_distance_heatmap()
-        self.run_ols()
         self.run_glms()
+        self.run_ols()
     
-    def run_glm(self,y,xs,f_name=None):
+    def add_glm_results(self,df_summary,y_series,reses):
+        for res in reses:
+            error = (y_series - reses[res].fittedvalues) 
+            mean_square_error = (error*error).mean()
+            abs_error = abs(error).mean()
+            pseudo_r2 = 1-(reses[res].deviance/reses[res].null_deviance)
+            series = pd.Series({
+                'Model': res,
+                'Root Mean Squared Error' : np.sqrt(mean_square_error),
+                'Mean Absolute Error': abs_error,
+                'Pseudo R2': pseudo_r2,
+                'Residual Deviance': reses[res].deviance,
+                'Df Residual': reses[res].df_resid,
+                })
+            series = series.append(reses[res].params)
+            series.rename({'log_distance_ij':'Gamma','log_poi_diversity_0_j':'Beta','log_poi_sum_0_j':'Alpha'},inplace=True)
+            series.rename({'log_geo_distance_ij':'Gamma','log_geo_poi_diversity_0_j':'Beta','log_geo_poi_sum_0_j':'Alpha'},inplace=True)
+            df_summary = df_summary.append(series,ignore_index=True)
+        return df_summary
+    def glm(self,y,xs,f_name=None):
         df = self.df
         x_string='+'.join(xs)
         
@@ -740,40 +798,37 @@ class HuffModel(Result):
             f_name = '{}_{}'.format(y,x_string) 
         self.write_regression_result(res_nb,'nb_{}'.format(f_name))
         self.write_regression_result(res_poisson,'pois_{}'.format(f_name))
-        self.plot_residuals(df[y], res_nb.fittedvalues, 'Flow Counts', 'resid_nb_{}'.format(f_name))
-        self.plot_residuals(df[y], res_poisson.fittedvalues, 'Flow Counts', 'resid_poisson_{}'.format(f_name))
+        self.plot_residuals(df[y], res_nb.fittedvalues, 'Flow Counts', 'nb_{}'.format(f_name))
+        self.plot_residuals(df[y], res_poisson.fittedvalues, 'Flow Counts', 'poisson_{}'.format(f_name))
         
         
         #### comparing mse
-        reses = {'poisson':res_poisson, 'nb':res_nb}
-        for res in reses:
+        df_summary = pd.DataFrame()
+        reses = {'Poisson':res_poisson, 'Negative Binomial':res_nb}
+        df_summary = self.add_glm_results(df_summary,df[y],reses)
+        
+        location = '../results/{}/regressions/summary'.format(self.name)
+        create_dir(location)
+        df_summary.to_csv(os.path.join(location,'model_fit_summary.csv'),index=False)
             
-            error = (df[y] - reses[res].fittedvalues) 
-            mean_square_error = np.sqrt(error*error).mean()
-            abs_error = abs(error).mean()
-            print(mean_square_error,file=open('../results/{}/regressions/mse_{}.txt'.format(self.name,res),'w'))
-            print(abs_error,file=open('../results/{}/regressions/mae_{}.txt'.format(self.name,res),'w'))
         return res_poisson,res_nb
-    
-            
-    def run_glms(self):
 
+     
+    def run_glms(self):
+        
         for n in range(self.REMOVE_RANGE):
             x_cols = ['poi_sum_{}_j'.format(n),'poi_diversity_{}_j'.format(n),'distance_ij']
             y = 'totalflow'
             xs = ['log_{}'.format(x) for x in x_cols]
-            xs_control = ['log_{}'.format(x) for x  in ['distance_ij']]
-            pois,nb = self.run_glm(y,xs,str(n))
-            pois_control,nb_control = self.run_glm(y,xs_control,'control_{}'.format(n))
-            poi_r2 = 1-(pois.deviance/pois.null_deviance)
-            nb_r2= 1-(nb.deviance/nb.null_deviance)
-            poi_r2_control = 1-(pois_control.deviance/pois_control.null_deviance)
-            nb_r2_control = 1-(nb_control.deviance/nb_control.null_deviance)
-            print ('proposed poi : {}'.format(poi_r2))
-            print ('proposed nb : {}'.format(nb_r2))
-            print ('====')
-            print ('control poi : {}'.format(poi_r2_control))
-            print ('control nb : {}'.format(nb_r2_control))
+# =============================================================================
+#             xs_control = ['log_{}'.format(x) for x  in ['distance_ij']]
+# =============================================================================
+            pois,nb = self.glm(y,xs,str(n))
+# =============================================================================
+#             pois_control,nb_control = self.run_glm(y,xs_control,'control_{}'.format(n))
+# =============================================================================
+            
+ 
         
     def run_ols(self):
         
@@ -835,33 +890,67 @@ class HuffModel(Result):
                 chunk = chunk.copy()
                 norm = chunk.prob.sum()
                 chunk.loc[:,'prob'] = chunk.prob/norm
-                chunk.loc[:,'fitted_flow'] = chunk.prob * chunk.totalflow_not_norm.sum()
+                chunk.loc[:,'fitted_flow'] = chunk.prob * (chunk.totalflow_not_norm.sum())
                 return chunk
             df_norm.loc[:,'prob']=np.exp(reg.fittedvalues)
             df_norm = df_norm.groupby('district_i').apply(normalize_prob)
                 
-                
             
             error = (df_norm['totalflow'] - df_norm['fitted_flow']) 
-            mean_square_error = np.sqrt(error*error).mean()
+            mean_square_error = np.sqrt((error*error).mean())
             abs_error = abs(error).mean()
-            df_norm.to_csv('../results/{}/regressions/df_ols.csv'.format(self.name))
-            print(mean_square_error,file=open('../results/{}/regressions/mse_{}.txt'.format(self.name,'ols'),'w'))
-            print(abs_error,file=open('../results/{}/regressions/mae_{}.txt'.format(self.name,'ols'),'w'))
-        
+
+            
+            location = '../results/{}/regressions/summary'.format(self.name)
+            df_summary = pd.read_csv(os.path.join(location,'model_fit_summary.csv'))
+            result_glm = self.run_glm(df_norm,xs2,y,family='gaussian')
+            df_summary = self.add_glm_results(df_summary, df_norm[y], {'Gaussian':result_glm})
+            df_summary.index = df_summary.Model
+            df_summary.loc['gaussian','Mean Absolute Error'] = abs_error
+            df_summary.loc['gaussian','Root Mean Squared Error'] = mean_square_error
+            
+# =============================================================================
+#             df_summary.drop(['Mean Absolute Error','Root Mean Squared Error'],inplace=True)
+# =============================================================================
+            
+            col_arranged = ['Model','Pseudo R2', 'Residual Deviance','Df Residual', 'Intercept', 'Alpha','Beta', 'Gamma']
+            df_summary = df_summary[col_arranged]
+            df_summary.to_csv(os.path.join(location,'model_fit_summary.csv'),index=False)
+            
+            print(df_summary.to_latex(index=False),file=open(os.path.join(location,'model_fit_summary_latex.tex'),'w'))
         self.write_regressions_summary(regs_global,'huff_globals'.format(n))
         
         
         
     def plot_poi_bars(self):
+        title_mapper ={'AutoSvc' : 'Auto Services',
+                       'Business' : 'Businesses',
+                       'CommSvc' : 'Community Services',
+                       'EduInst' : 'Education Institutes',
+                       'Entrtnmt' : 'Entertainment Venues',
+                       'FinInst': 'Financial Institutes', 
+                       'Hospitals': 'Hospitals',
+                       'ParkRec' : 'Recreational Parks',
+                       'RailRds': 'Railroads', 
+                       'Rstrnts': 'Restaurants', 
+                       'Shopping' : 'Shopping Venues', 
+                       'TrnsHubs': 'Transportion Hubs',
+                       'TrvlDest': 'Travel Destinations', 
+                       'poi_diversity_0': 'POI Diversity (Entropy)', 
+                       'poi_sum_0': 'POI Sum'
+            }
         cols = self.poi.columns.to_list()
-        omit = ['district_name','district_id','poidensity','divcount']
+        omit = ['district_name','district_id','poidensity','divcount', 'POI_sum', 'POI_diversity']
+        
     
         for o in omit:
             cols.remove(o)
         for col in cols:
-            y_lab = 'Counts'    
-            self.plot_bar(self.poi,col,self.poi.district_name,'{} {}'.format(col,y_lab),col)
+            if col in title_mapper:
+                title = title_mapper[col]
+            else:
+                title = col
+            self.plot_bar(self.poi,col,self.poi.district_name,title,col)
 
         
     def plot_distance_heatmap(self):
@@ -916,7 +1005,7 @@ class Supplementary(Result):
         df['district_id'] = df.index
         self.plot_map(df,'population','Population (in thousands)','population')
         self.plot_map(df,'pop_rep','Sample counts','sample')
-        self.plot_scatter(df,'pop_rep','population','Sample Size','Population Size',has_best_fit=True)
+        self.plot_scatter(df,'pop_rep','population','Sample Size','Population Size',has_best_fit=True,corr_loc= (500,50))
         
         df = self.df['pop_36']
         self.plot_bar(df, 'population', df.district_name.values,'Population (in thousands)','population')
@@ -935,24 +1024,125 @@ class Supplementary(Result):
         self.get_population_plots()
         self.get_area_plots()
         self.get_rent_plots()
+        
+def get_bj_population_rent():
+    df=pd.read_csv('../data/beijing/bj_pop.csv')[['districtID','Popu','Popu_float','Pop_Sum','Dens_Pob','Area_km2']]
+    df.rename(columns={'districtID':'district_id','Pop_Sum':'population','Popu_float':'population_float','Popu':'population_res','Area_km2':'area_km2','Dens_Pob':'popdse'},inplace=True)
+    df['population']=df['population']/1000
+    df['popdse'] = df['popdse']/1000
+    
+    df2=pd.read_csv('../data/beijing/bj_house_price.csv')
+    df2.rename(columns={'districtID':'district_id',u'Mean House Price (MHP)':'hpi'},inplace=True)
+    df=pd.merge(df,df2[['district_id','hpi']],on='district_id',how='left')
 
+    return df
+
+def get_bj_consumption_data():
+     df = pd.read_csv('../data/beijing/beijing_consumption.csv',encoding='utf-8',sep='\t')
+     df.rename(columns={'districtID': 'district_id','numberofCustomers':'pop_rep','dEigen':'eigen_centrality','categoryEntropy':'consumption_diversity'},inplace=True)
+     return df[['district_id','eigen_centrality','pop_rep','economy']]
+ 
+
+
+class SupplementaryChina(Result):
+    name = 'supplementary_beijing'
+    def __init__(self):
+        self.df = pd.merge(get_bj_population_rent(),get_bj_consumption_data(),on='district_id',how='outer').dropna()
+        
+    def get_population_plots(self):
+        df = self.df
+        self.plot_map(df,'population','Population (in thousands)','population')
+        self.plot_map(df,'pop_rep','Sample counts','sample')
+        self.plot_scatter(df,'pop_rep','population','Sample Size','Population Size',has_best_fit=True,corr_loc= (500,50))
+        
+        self.plot_bar(df, 'population', df.district_id.values,'Population (in thousands)','population')
+        self.plot_bar(df, 'popdse', df.district_id.values,'Density (in thousands/km2)','population_density')
+        
+    def get_area_plots(self):
+        df = self.df
+        self.plot_map(df,'area_km2','Area (in km2)', 'area')
+        self.plot_bar(df,'area_km2',df.district_id,'Area (in km2)','area')
+    
+    def get_house_price_plots(self):
+        df = self.df
+        self.plot_map(df,'hpi','Housing Price','houseprice')
+        
+    def run_for_results(self):
+        self.get_population_plots()
+        self.get_area_plots()
+        self.get_house_price_plots()
+        
+
+
+        
+#%%
+        
+df = pd.read_csv('../data/beijing/dianping.csv')
+import json
+
+
+def getCoupon2shop():
+    data = pd.read_csv('../data/beijing/meituan1.csv', 'utf-8', delimiter = ',')
+    coupon2shop = {}
+    data.columns = range(16)
+    for i in range(len(data)):
+        try:
+            coupon2shop[int(data[11][i].split('/')[-1][:-5])] = int(data[14][i].split('/')[-1])
+        except:
+            pass
+    return coupon2shop
+
+def getShop2idFreq(coupon2shop):
+    shop2idf={}
+    banlist=set()
+    coupon= json.load(open('../data/beijing/bz_user_time.json', 'rb'))
+    for dt in coupon:
+        for key,value in coupon[dt].items():
+            username=key.split('\t')[1]
+            print(value)
+            if value<=20:
+                couponname=int(key.split('\t')[0])
+                if couponname in coupon2shop:
+                    shopname=coupon2shop[couponname]
+                    if shopname not in shop2idf:
+                        shop2idf[shopname]={}
+                    if username not in shop2idf[shopname]:
+                        shop2idf[shopname][username]=0
+                    shop2idf[shopname][username]+=1
+            else:
+                banlist=banlist | set(username)
+        banlist=list(banlist)    
+        for key,value in shop2idf.iteritems():
+            for user in banlist:
+                if user in value:
+                    value.pop(user)        
+    return shop2idf#%%
+
+shop2idf = getShop2idFreq(getCoupon2shop())
+#%%
 results=[]
 
-results.append(Supplementary())
-results.append(HuffModel())
+# =============================================================================
+# results.append(Supplementary())
+# =============================================================================
+# =============================================================================
+# results.append(HuffModel())
+# =============================================================================
 # =============================================================================
 # results.append(CommoditiesAndFlow())
 # =============================================================================
 # =============================================================================
 # results.append(FlowAndEconomicOutput())
 # =============================================================================
+results.append(SupplementaryChina())
 
 for result in results:
     result.run_for_results()
 
 #%%
-
     
+
+#%%
 
 #functions for exploratory purposes SI
 
