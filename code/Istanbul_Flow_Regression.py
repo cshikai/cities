@@ -367,7 +367,7 @@ def create_dir(location):
 class Result(object):
     
     def write_regression_result(self,res,f_name):
-        result_location = '../results/{}/regressions'.format(self.name)
+        result_location = '../results/{}/regressions/indv_results'.format(self.name)
         create_dir(result_location)
         with open(os.path.join(result_location,'{}.tex'.format(f_name)), 'w') as f:
             f.write(res.summary().as_latex())
@@ -378,7 +378,7 @@ class Result(object):
                      'R2':lambda x: "{:.2f}".format(x.rsquared),
                      'Adjusted R2':lambda x: "{:.2f}".format(x.rsquared_adj)}       
         dfoutput = summary_col(reses,stars=True,info_dict=info_dict)
-        result_location = '../results/{}/regressions'.format(self.name)
+        result_location = '../results/{}/regressions/summary'.format(self.name)
         create_dir(result_location)
         self.reg_table = dfoutput
         with open(os.path.join(result_location,'{}.tex'.format('{}_regression_summary_table'.format(y))), 'w') as f:
@@ -427,7 +427,18 @@ class Result(object):
         if not f_name:
             f_name = '{}_{}'.format(y,x_string) 
         self.write_regression_result(res,f_name)
+        
+        self.plot_residuals(df[y].values,res.fittedvalues,y,f_name='resid_{}'.format(f_name))
         return res
+    
+    def plot_residuals(self,y,y_fitted,y_name,f_name):
+        df=pd.DataFrame()
+        
+        df.loc[:,'errors'] =  y - y_fitted
+        df.loc[:,'y'] = y
+        df.loc[:,'y_fitted'] = y_fitted
+        self.plot_scatter(df,'y_fitted','errors',x_lab ='Fitted {}'.format(y_name),y_lab='residuals',f_name=f_name)
+        
                 
     def save_plot(self,fig_name):
         plot_location = '../results/{}/plots'.format(self.name)
@@ -437,7 +448,9 @@ class Result(object):
     def get_corr(self,df,x,y):
         return df[[x, y]].corr()[y][x]
     
-    def plot_scatter(self,df,x,y,x_lab=None,y_lab=None,has_best_fit=False,controls=None):
+    def plot_scatter(self,df,x,y,x_lab=None,y_lab=None,has_best_fit=False,controls=None,f_name=None):
+        if not f_name:
+            f_name = '{}_{}.png'.format(x,y)
         plt.figure()
         if not x_lab:
             x_lab = x
@@ -445,14 +458,17 @@ class Result(object):
             y_lab = y
         plt.subplot(111)
         plt.scatter(df[x].values, df[y].values,color='#1B5F68')
-        corr=self.get_corr(df,x,y)
-        plt.text(df[x].mean(),df[y].mean(),'Correlation : {}'.format(corr),size=15)
+        
         plt.xlabel(x_lab,size=15)
         plt.ylabel(y_lab,size=15)
         if has_best_fit:
+            corr=self.get_corr(df,x,y)
+            plt.text(df[x].mean(),df[y].mean(),'Correlation : {}'.format(corr),size=15)
             plt.plot(np.unique(df[x].values), np.poly1d(np.polyfit(df[x].values, df[y].values, 1))(np.unique(df[x].values)))
+        else:
+            corr=0
         plt.tight_layout()
-        self.save_plot('{}_{}.png'.format(x,y))
+        self.save_plot('scatter_{}'.format(f_name))
         
         return corr
     def plot_map(self,df,col,legend_string,name):
@@ -506,9 +522,8 @@ class CommoditiesAndFlow(Result):
         
         for x in xs:
             for y in ys:
-                print (x)
-                print (y)
-                corr=self.plot_scatter(self.df['istanbul'],x,y)
+
+                corr=self.plot_scatter(self.df['istanbul'],x,y,has_best_fit=True)
                 df=df.append({'x':x,'y':y,'correlation':corr},ignore_index=True)
         df.sort_values('correlation',ascending=False,inplace=True)
         loc = '../results/{}'.format(self.name)
@@ -575,10 +590,29 @@ def read_areas():
     
 def read_poi():
     poi = pd.read_csv('../data/istanbul/attractiveness.csv')
+    poi.rename(columns={'POLYGON_NM':'district_name'},inplace=True)
+    to_remove = ['MajHwys','SecHwys','Parking','RailRds']
+# =============================================================================
+#     ['TrnsHubs','Hospitals','EduInst','FinInst','AutoSvc','CommSvc']
+# =============================================================================
+# =============================================================================
+#          ['ParkRec','Rstrnts','Entrtnmt','Business','Shopping','TrvDest']
+# =============================================================================
+        
+    poi_cols = poi.columns.tolist()  
+    for o in ['district_name','district_id','poidensity','divcount','POI_diversity','POI_sum']+to_remove:
+        poi_cols.remove(o)
+    
+    poi.loc[:,'poi_diversity_0'] = poi.apply(lambda row: scipy.stats.entropy(row[poi_cols].values.tolist()),1)
+    poi.loc[:,'poi_sum_0'] = poi.apply(lambda row: row[poi_cols].sum(),1)
+# =============================================================================
+#     for i in range(len(to_remove)):
+#         poi_cols.remove(to_remove[i])
+#         poi.loc[:,'poi_diversity_{}'.format(i+1)] = poi.apply(lambda row: scipy.stats.entropy(row[poi_cols].values.tolist()),1) 
+#         poi.loc[:,'poi_sum_{}'.format(i+1)] = poi.apply(lambda row: row[poi_cols].sum(),1)
+# =============================================================================
     poi.sort_values(by='district_id',inplace=True)
     poi.index=poi.district_id
-    poi.rename(columns={'POLYGON_NM':'district_name'},inplace=True)
-
     return poi
 
 def get_distance_ij():
@@ -656,19 +690,29 @@ def add_distance_measure(row,dist):
 
 
 class HuffModel(Result):
-    
+    REMOVE_RANGE = 1
     name = 'huffmodel'
     def __init__(self):
         totalflow = get_total_flows()       
         dist = get_distance_ij()
         poi = read_poi()
-        poi = normalize_amenities(poi)
-        totalflow['poi_sum_i'],totalflow['poi_sum_j'] = zip(*totalflow.apply(lambda x:add_poi_measure(x,'POI_sum',poi),1))
-        totalflow['poi_diversity_i'],totalflow['poi_diversity_j'] = zip(*totalflow.apply(lambda x:add_poi_measure(x,'POI_diversity',poi),1))
-        totalflow['poi_sum_norm_i'],totalflow['poi_sum_norm_j'] = zip(*totalflow.apply(lambda x:add_poi_measure(x,'poi_sum_norm',poi),1))
-        totalflow['poi_diversity_norm_i'],totalflow['poi_diversity_norm_j'] = zip(*totalflow.apply(lambda x:add_poi_measure(x,'poi_diversity_norm',poi),1))
+# =============================================================================
+#         poi = normalize_amenities(poi)
+# =============================================================================
+        
+        for n in range(self.REMOVE_RANGE):
+            totalflow['poi_sum_{}_i'.format(n)],totalflow['poi_sum_{}_j'.format(n)] = zip(*totalflow.apply(lambda x:add_poi_measure(x,'poi_sum_{}'.format(n),poi),1))
+            totalflow['poi_diversity_{}_i'.format(n)],totalflow['poi_diversity_{}_j'.format(n)] = zip(*totalflow.apply(lambda x:add_poi_measure(x,'poi_diversity_{}'.format(n),poi),1))
+# =============================================================================
+#         totalflow['poi_sum_norm_i'],totalflow['poi_sum_norm_j'] = zip(*totalflow.apply(lambda x:add_poi_measure(x,'poi_sum_norm',poi),1))
+#         totalflow['poi_diversity_norm_i'],totalflow['poi_diversity_norm_j'] = zip(*totalflow.apply(lambda x:add_poi_measure(x,'poi_diversity_norm',poi),1))
+# =============================================================================
         totalflow['distance_ij'] = totalflow.apply(lambda x: add_distance_measure(x,dist),1)      
-        x_cols = ['poi_sum_j','poi_diversity_j','distance_ij']
+        x_cols = ['distance_ij']
+        for n in range(self.REMOVE_RANGE):
+            x_cols.append('poi_sum_{}_j'.format(n))
+            x_cols.append('poi_diversity_{}_j'.format(n))
+        
         for col in x_cols:
             totalflow['log_{}'.format(col)] = np.log(totalflow[col])
         self.df = totalflow
@@ -686,76 +730,126 @@ class HuffModel(Result):
         df = self.df
         x_string='+'.join(xs)
         
-        mod = smf.glm('{} ~ {}'.format(y,x_string), data=df,family=sm.families.Poisson())
-        res = mod.fit()
+        model_poisson = smf.glm('{} ~ {}'.format(y,x_string), data=df,family=sm.families.Poisson())
+        res_poisson = model_poisson.fit()
         
-        mod2 = smf.glm('{} ~ {}'.format(y,x_string), data=df,family=sm.families.NegativeBinomial())
-        res2 = mod2.fit(method='newton')
+        model_nb = smf.glm('{} ~ {}'.format(y,x_string), data=df,family=sm.families.NegativeBinomial())
+        res_nb = model_nb.fit(method='newton')
         
         if not f_name:
             f_name = '{}_{}'.format(y,x_string) 
-        self.write_regression_result(res2,'nb_{}'.format(f_name))
-        self.write_regression_result(res,'pois_{}'.format(f_name))
-        return res,res2
+        self.write_regression_result(res_nb,'nb_{}'.format(f_name))
+        self.write_regression_result(res_poisson,'pois_{}'.format(f_name))
+        self.plot_residuals(df[y], res_nb.fittedvalues, 'Flow Counts', 'resid_nb_{}'.format(f_name))
+        self.plot_residuals(df[y], res_poisson.fittedvalues, 'Flow Counts', 'resid_poisson_{}'.format(f_name))
+        
+        
+        #### comparing mse
+        reses = {'poisson':res_poisson, 'nb':res_nb}
+        for res in reses:
+            
+            error = (df[y] - reses[res].fittedvalues) 
+            mean_square_error = np.sqrt(error*error).mean()
+            abs_error = abs(error).mean()
+            print(mean_square_error,file=open('../results/{}/regressions/mse_{}.txt'.format(self.name,res),'w'))
+            print(abs_error,file=open('../results/{}/regressions/mae_{}.txt'.format(self.name,res),'w'))
+        return res_poisson,res_nb
     
             
     def run_glms(self):
-        x_cols = ['poi_sum_j','poi_diversity_j','distance_ij']
-        y = 'totalflow'
-        xs = ['log_{}'.format(x) for x in x_cols]
-        xs_control = ['log_{}'.format(x) for x  in ['distance_ij']]
-        pois,nb = self.run_glm(y,xs)
-        pois_control,nb_control = self.run_glm(y,xs_control)
-        poi_r2 = 1-(pois.deviance/pois.null_deviance)
-        nb_r2= 1-(nb.deviance/nb.null_deviance)
-        poi_r2_control = 1-(pois_control.deviance/pois_control.null_deviance)
-        nb_r2_control = 1-(nb_control.deviance/nb_control.null_deviance)
-        print ('proposed poi : {}'.format(poi_r2))
-        print ('proposed nb : {}'.format(nb_r2))
-        print ('====')
-        print ('control poi : {}'.format(poi_r2_control))
-        print ('control nb : {}'.format(nb_r2_control))
+
+        for n in range(self.REMOVE_RANGE):
+            x_cols = ['poi_sum_{}_j'.format(n),'poi_diversity_{}_j'.format(n),'distance_ij']
+            y = 'totalflow'
+            xs = ['log_{}'.format(x) for x in x_cols]
+            xs_control = ['log_{}'.format(x) for x  in ['distance_ij']]
+            pois,nb = self.run_glm(y,xs,str(n))
+            pois_control,nb_control = self.run_glm(y,xs_control,'control_{}'.format(n))
+            poi_r2 = 1-(pois.deviance/pois.null_deviance)
+            nb_r2= 1-(nb.deviance/nb.null_deviance)
+            poi_r2_control = 1-(pois_control.deviance/pois_control.null_deviance)
+            nb_r2_control = 1-(nb_control.deviance/nb_control.null_deviance)
+            print ('proposed poi : {}'.format(poi_r2))
+            print ('proposed nb : {}'.format(nb_r2))
+            print ('====')
+            print ('control poi : {}'.format(poi_r2_control))
+            print ('control nb : {}'.format(nb_r2_control))
         
     def run_ols(self):
-        df = self.df
+        
 # =============================================================================
 #         xs = ['poi_sum_j','poi_diversity_j','distance_ij']        
 # =============================================================================
-        xs = ['poi_sum_norm_j','poi_diversity_norm_j','distance_ij']        
-        def normalize_geo_log(chunk,xs):
-            haszero = ((chunk.totalflow == 0).sum()) > 0
-            if haszero:
-                chunk = chunk[chunk.totalflow!=0]
-            summ = chunk.totalflow.sum()
-            chunk.totalflow = chunk.totalflow/summ
-            geo= {}
-            for var in xs+ ['totalflow']:
-                geo[var] = scipy.stats.gmean(chunk[var])
-                chunk['log_geo_{}'.format(var)] = np.log(chunk[var]/geo[var])             
-            return chunk
-        df_norm = df.groupby('district_i').apply(lambda x:normalize_geo_log(x,xs)).reset_index(drop=True)
-        #need to deal with zeros
-        y = 'log_geo_totalflow'
-        xs2 = ['log_geo_{}'.format(x) for x in xs]
-        df_params=pd.DataFrame()
-        districts = []
-        regs=[]
-        for i, chunk in df_norm.groupby('district_i'):
-
-            reg = self.regress(chunk,xs2,y,f_name='huff_ols_district_{}'.format(i))
-            df_params = df_params.append(pd.DataFrame(reg.params).transpose())
-            districts.append('district_{}'.format(int(i)))
+        regs_global = []
+        for n in range(self.REMOVE_RANGE):
+            df = self.df.copy()
+            xs = ['poi_sum_{}_j'.format(n),'poi_diversity_{}_j'.format(n),'distance_ij']        
+            def normalize_geo_log(chunk,xs):
+                chunk = chunk.copy()
+                haszero = ((chunk.totalflow == 0).sum()) > 0
+                if haszero:
+                    chunk = chunk[chunk.totalflow!=0]
+                chunk.loc[:,'totalflow_not_norm'] = chunk.totalflow.copy()
+                summ = chunk.totalflow.sum()
+                chunk.totalflow = chunk.totalflow/summ
+                geo= {}
+                for var in xs+ ['totalflow']:
+                    geo[var] = scipy.stats.gmean(chunk[var])
+                    chunk['log_geo_{}'.format(var)] = np.log(chunk[var]/geo[var])
+                for var in geo:
+                    chunk.loc[:,'geo_{}'.format(var)]=geo[var]
+                return chunk
+            df_norm = df.groupby('district_i').apply(lambda x:normalize_geo_log(x,xs)).reset_index(drop=True)
+            #need to deal with zeros
+            y = 'log_geo_totalflow'
+            xs2 = ['log_geo_{}'.format(x) for x in xs]
+            df_params=pd.DataFrame()
+            districts = []
+            regs=[]
+# =============================================================================
+#             for i, chunk in df_norm.groupby('district_i'):
+#     
+#                 reg = self.regress(chunk,xs2,y,f_name='huff_ols_district_{}_{}'.format(i,n))
+#                 df_params = df_params.append(pd.DataFrame(reg.params).transpose())
+#                 districts.append('district_{}'.format(int(i)))
+#                 regs.append(reg)
+#             
+#             df_params = df_params.append(pd.DataFrame(df_params.mean()).transpose())
+#             districts.append('average')
+# =============================================================================
+            
+            reg = self.regress(df_norm,xs2,y,f_name='huff_ols_global_{}'.format(n))
+            regs_global.append(reg)
             regs.append(reg)
-        df_params = df_params.append(pd.DataFrame(df_params.mean()).transpose())
-        districts.append('average')
-        reg = self.regress(df_norm,xs2,y,f_name='huff_ols_global'.format(i))
-        df_params = df_params.append(pd.DataFrame(reg.params).transpose())
-        districts.append('global')
-        df_params['district_id'] = districts
-        self.write_regressions_summary(regs,'huff')
-        df_params.to_csv('../results/{}/regressions/parameters.csv'.format(self.name))
+            df_params = df_params.append(pd.DataFrame(reg.params).transpose())
+            districts.append('global')
+            
+            df_params['district_id'] = districts
+            self.write_regressions_summary(regs,'huff_{}'.format(n))
+            parameters_loc = '../results/{}/regressions/parameters'.format(self.name)
+            create_dir(parameters_loc)
+            df_params.to_csv(os.path.join(parameters_loc,'parameters_{}.csv').format(n))
+            
+  
+            def normalize_prob(chunk):
+                chunk = chunk.copy()
+                norm = chunk.prob.sum()
+                chunk.loc[:,'prob'] = chunk.prob/norm
+                chunk.loc[:,'fitted_flow'] = chunk.prob * chunk.totalflow_not_norm.sum()
+                return chunk
+            df_norm.loc[:,'prob']=np.exp(reg.fittedvalues)
+            df_norm = df_norm.groupby('district_i').apply(normalize_prob)
+                
+                
+            
+            error = (df_norm['totalflow'] - df_norm['fitted_flow']) 
+            mean_square_error = np.sqrt(error*error).mean()
+            abs_error = abs(error).mean()
+            df_norm.to_csv('../results/{}/regressions/df_ols.csv'.format(self.name))
+            print(mean_square_error,file=open('../results/{}/regressions/mse_{}.txt'.format(self.name,'ols'),'w'))
+            print(abs_error,file=open('../results/{}/regressions/mae_{}.txt'.format(self.name,'ols'),'w'))
         
-
+        self.write_regressions_summary(regs_global,'huff_globals'.format(n))
         
         
         
@@ -816,6 +910,7 @@ class Supplementary(Result):
         df = pd.merge(df,self.df['area'][['district_id']],on='district_id',how='left')
         df.sort_values(by='district_id',inplace=True)
         self.df['pop_36'] = df
+        self.df['hpi']=get_hpi()
     def get_population_plots(self):
         df = self.df['pop'].join(self.df['rep'],how='left')
         df['district_id'] = df.index
@@ -832,22 +927,25 @@ class Supplementary(Result):
         self.plot_map(df,'area_km2','Area (in km2)', 'area')
         self.plot_bar(df,'area_km2',df.district_name,'Area (in km2)','area')
         
-        
+    def get_rent_plots(self):
+        df = self.df['hpi']
+        self.plot_map(df,'hpi','Rent Price','rent')
         
     def run_for_results(self):
         self.get_population_plots()
         self.get_area_plots()
+        self.get_rent_plots()
 
 results=[]
 
 results.append(Supplementary())
-# =============================================================================
-# results.append(HuffModel())
-# =============================================================================
+results.append(HuffModel())
 # =============================================================================
 # results.append(CommoditiesAndFlow())
 # =============================================================================
-results.append(FlowAndEconomicOutput())
+# =============================================================================
+# results.append(FlowAndEconomicOutput())
+# =============================================================================
 
 for result in results:
     result.run_for_results()
