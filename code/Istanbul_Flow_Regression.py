@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import networkx as nx
-
+import json
 
 import folium
 
@@ -26,8 +26,16 @@ sns.set_style("whitegrid")
 
 EXCLUDE = [1,131,111]
 
+def split_df():
+    rows=1000000
+    #split file because of github limit
+    df= pd.read_csv('../data/istanbul/0-transactions.txt')
+    for i in range(int(np.ceil(len(df)/rows))):
+         df.iloc[i*rows:(i+1)*rows].to_csv('../data/istanbul/0-transactions_{}.txt'.format(i),index=False)
+         
+
 def normalise_data(df,omit=[]): 
-    df2 = df.copy(deep=True)
+    df = df.copy(deep=True)
     cols=df.columns.tolist()
     for o in omit:
         cols.remove(o)
@@ -35,12 +43,16 @@ def normalise_data(df,omit=[]):
         mean = df[col].mean()
         std = df[col].std()
         df[col] = (df[col]-mean)/std
-    return df2
+    return df
 
 #helper to read raw credit card data , repeat means we consider more than one trip by a user
 def read_raw_flows(is_repeat,omit=True):
     print("Reading transcation data...\n")
-    df_trans = pd.read_csv('../data/istanbul/0-transactions.txt')
+    location = '../data/istanbul/'
+    df_trans = pd.DataFrame()
+    for f in os.listdir(location):
+        if '0-transactions_' in f:
+            df_trans= df_trans.append(pd.read_csv(os.path.join(location,f)))
     
     df_trans.rename(columns={
         'MUSTERI_ID_MASK': 'customer_id',
@@ -148,16 +160,20 @@ def get_flow_matrix(is_repeat):
     return movement
 
 def get_flow_df(is_repeat):
-    flowmat = get_flow_matrix(is_repeat)
-    within_flow = flowmat[flowmat.hdistrict_id == flowmat.sdistrict_id].drop(columns=['sdistrict_id'])
-    within_flow.rename(columns= {'flow': 'withinflow','hdistrict_id':'district_id'},inplace=True)
-    within_flow.index=within_flow.district_id
-    within_flow.drop(columns =['district_id'],inplace=True)
-    outflow = flowmat.groupby('hdistrict_id')['flow'].sum().rename('outflow')
+    flowmat = get_total_flows(is_repeat=True)
+    outflow = flowmat.groupby('district_i')['totalflow'].sum().rename('outflow')
     outflow.index.rename('district_id',inplace=True)
     
-    inflow = flowmat.groupby('sdistrict_id')['flow'].sum().rename('inflow')
+    inflow = flowmat.groupby('district_j')['totalflow'].sum().rename('inflow')
     inflow.index.rename('district_id',inplace=True)
+    
+    within_flow = flowmat[flowmat.district_i == flowmat.district_j]
+    within_flow.rename(columns= {'totalflow': 'withinflow','district_i':'district_id'},inplace=True)
+    within_flow.index=within_flow.district_id
+    
+    
+    within_flow = within_flow[['withinflow']]
+    
     df = within_flow.join(outflow,how ='left',on = 'district_id')
     df = df.join(inflow,how ='left',on = 'district_id')
     df.loc[:,'inflow'] = df['inflow'] - df['withinflow']
@@ -212,22 +228,25 @@ def compute_all_diversity(df,district_col,diversity_col,column_name_prefix):
         
 
 # helper to get inflow demographic diversity,  and outflow destination diversity
-def read_in_out_diversity():
+def read_in_out_diversity(is_repeat=True):
     demog = get_customer_info()
     demog.index = demog.customer_id
     demog.drop(columns=['customer_id','hdistrict_id'],inplace=True)
-    df = read_raw_flows(is_repeat=True)
+    df = read_raw_flows(is_repeat)
     df = df.join(demog,on='customer_id',how='left') 
     assert not df.incomecat.isnull().sum()
     #df.dropna(subset=['hdistrict_id'],inplace=True)
     #'vector' that describes the diversity of the people
-#==============================================================================
+    df['composite_in']=df.agecat.astype(str) + df.incomecat.astype(str)+ df.hdistrict_id.astype(str) + df.education.astype(str) 
+# =============================================================================
 #     df['composite_in']=df.agecat.astype(str) + df.incomecat.astype(str)+ df.hdistrict_id.astype(str) + df.education.astype(str) + df.gender.astype(str)
-#==============================================================================
-    df['composite_in']=df.agecat.astype(str) + df.incomecat.astype(str)+ df.wdistrict_id.astype(str)+ df.hdistrict_id.astype(str) + df.education.astype(str) + df.gender.astype(str)
-#==============================================================================
-#      df['composite_in']=df.agecat.astype(str) + df.incomecat.astype(str)+ df.hdistrict_id.astype(str) + df.education.astype(str) + df.gender.astype(str)
-#==============================================================================
+# =============================================================================
+# =============================================================================
+#     df['composite_in']=df.agecat.astype(str) + df.incomecat.astype(str)+ df.wdistrict_id.astype(str)+ df.hdistrict_id.astype(str) + df.education.astype(str) + df.gender.astype(str)
+# =============================================================================
+# =============================================================================
+#     df['composite_in']=df.agecat.astype(str) + df.incomecat.astype(str)+ df.hdistrict_id.astype(str) + df.education.astype(str) + df.gender.astype(str)
+# =============================================================================
     df_div=compute_all_diversity(df,'sdistrict_id','composite_in','composite_demographic_inflow')
     df_div=df_div.join(compute_all_diversity(df,'hdistrict_id','sdistrict_id','destination'),how='left',on='district_id')
     df_div.to_csv('../data/istanbul/flow_diversity.csv')
@@ -366,26 +385,57 @@ def create_dir(location):
         
 class Result(object):
     
+    def plot_boxplot(self,df,col,title,f_name):
+        markers = dict(markerfacecolor='r', marker='o')
+        plt.figure()
+        plt.boxplot(df[col].values,flierprops=markers)
+        plt.title(title)
+        self.save_plot('box_{}'.format(f_name))
+        
+    def plot_predicted(self,df,x,y,x_lab,y_lab,f_name):
+        if not f_name:
+            f_name = '{}_{}.png'.format(x,y)
+        plt.figure()
+        if not x_lab:
+            x_lab = x
+        if not y_lab:    
+            y_lab = y
+        plt.subplot(111)
+        plt.scatter(df[x].values, df[y].values,color='#1B5F68')
+        
+        plt.xlabel(x_lab,size=15)
+        plt.ylabel(y_lab,size=15)
+       
+        maxx =max(df[x].max(),df[y].max())
+        minn =min(df[x].min(),df[y].min())
+        plt.plot([minn,maxx],[minn,maxx])
+        plt.tight_layout()
+        self.save_plot('scatter_{}'.format(f_name))
+        
     def write_regression_result(self,res,f_name):
         result_location = '../results/{}/regressions/indv_results'.format(self.name)
         create_dir(result_location)
         with open(os.path.join(result_location,'{}.tex'.format(f_name)), 'w') as f:
             f.write(res.summary().as_latex())
-        print(res.summary())
     
-    def write_regressions_summary(self,reses,y):
-        info_dict = {'N':lambda x: "{0:d}".format(int(x.nobs)),
-                     'R2':lambda x: "{:.2f}".format(x.rsquared),
-                     'Adjusted R2':lambda x: "{:.2f}".format(x.rsquared_adj)}       
-        dfoutput = summary_col(reses,stars=True,info_dict=info_dict)
+    def write_regressions_summary(self,reses,model_names,reg_order,f_name):
+
+        print (model_names,reg_order)
+        info_dict = {'Observations':lambda x: "{0:d}".format(int(x.nobs)),}
+                     #'R2':lambda x: "{:.4f}".format(x.rsquared),
+                     #'Adjusted R2':lambda x: "{:.4f}".format(x.rsquared_adj)}   
+        dfoutput = summary_col(reses,stars=True,info_dict=info_dict,model_names=model_names,regressor_order=reg_order)
         result_location = '../results/{}/regressions/summary'.format(self.name)
         create_dir(result_location)
         self.reg_table = dfoutput
-        with open(os.path.join(result_location,'{}.tex'.format('{}_regression_summary_table'.format(y))), 'w') as f:
+        with open(os.path.join(result_location,'{}.tex'.format('{}_regression_summary_table'.format(f_name))), 'w') as f:
             f.write(dfoutput.as_latex())
     
     def plot_bar(self,df,col,ticks,title,name_suffix):
         colors = ['#EF476F','#00CFC1','#086788','#FF9F1C','#EB5E28']
+# =============================================================================
+#         colors = ['#086788','#00CFC1','#086788','#FF9F1C','#EB5E28']
+# =============================================================================
         color = colors[df.columns.get_loc(col)%len(colors)]
         
         
@@ -410,7 +460,7 @@ class Result(object):
         plt.tight_layout()
         self.save_plot('heatmap_.png'.format(name_suffix))
         
-    def run_regressions(self,df_indexes,cols,combinations,y):
+    def run_regressions(self,df_indexes,cols,combinations,y,model_names,reg_order,f_name=None):
         reses = []
         assert len(df_indexes) == len(combinations)
         for i in range(len(combinations)):
@@ -418,7 +468,9 @@ class Result(object):
             combination = combinations[i]
             xs = [cols[c] for c in combination]
             reses.append(self.regress(df,xs,y))
-        self.write_regressions_summary(reses,y)
+        if not f_name:
+            f_name = y
+        self.write_regressions_summary(reses,model_names,reg_order,f_name)
             
         
     def run_glm(self,df,xs,y,family,f_name=None):
@@ -462,7 +514,7 @@ class Result(object):
     def save_plot(self,fig_name):
         plot_location = '../results/{}/plots'.format(self.name)
         create_dir(plot_location)
-        plt.savefig(os.path.join(plot_location,'{}'.format(fig_name)),dpi=300)
+        plt.savefig(os.path.join(plot_location,'{}.png'.format(fig_name)),dpi=300)
     
     def get_corr(self,df,x,y):
         return df[[x, y]].corr()[y][x]
@@ -496,6 +548,43 @@ class Result(object):
         self.save_plot('scatter_{}'.format(f_name))
         
         return corr
+    def plot_bubble_map(self,df,col,scale,u_districts,name):
+        
+        if 'beijing' in self.name:
+            
+            loc = [39.9042, 116.4074]
+            state_geo = '../data/beijing/bj_shapefile/bj_shapefile.geojson'
+            district_id_col='districtID'
+            
+        else:
+            loc = [41.0082, 28.9784]
+            state_geo = '../data/istanbul/district_level_shape/district.geojson'
+            district_id_col='districtid'
+        style_function = lambda x: {'fillOpacity': 0.15 if       
+                                x['properties'][district_id_col] in u_districts else
+                                 0.85, 'fillColor' : "#000000",'stroke': False }
+        mapbg=folium.GeoJson(state_geo,style_function)
+        # Make an empty map
+        m = folium.Map(location=loc, tiles="cartodbpositron", zoom_start=10)
+         
+        # I can add marker one by one on the map
+        for i in range(0,len(df)):
+           folium.Circle(
+              location=[df.iloc[i]['lat'], df.iloc[i]['lon']],
+# =============================================================================
+#               popup=df.index[i],
+# =============================================================================
+              radius=df.iloc[i][col]*scale,
+              color='crimson',
+              fill=True,
+              fill_color='crimson'
+           ).add_to(m)
+        mapbg.add_to(m)
+        # Save it as html
+        location = '../results/{}/maps'.format(self.name)
+        create_dir(location)
+        m.save(os.path.join(location,'bubble_map_{}.html'.format(name)))
+
     def plot_map(self,df,col,legend_string,name):
         # Initialize the map:
         if 'beijing' in self.name:
@@ -539,7 +628,7 @@ class Result(object):
         # Save to html
         location = '../results/{}/maps'.format(self.name)
         create_dir(location)
-        m.save(os.path.join(location,'map_{}.html'.format(name)))
+        m.save(os.path.join(location,'choro_map_{}.html'.format(name)))
         
 class CommoditiesAndFlow(Result):
     
@@ -591,17 +680,22 @@ class FlowAndEconomicOutput(Result):
     #==============================================================================
         x_lab= 'Diversity of People entering in district'
         y_lab= "Diversity of Flow (in Thousands)"
-        y_lab= "Economic Productivity"
+        y_lab= "log(GDP)"
         x_lab='Volume of Total Flow'
         x_lab = None
-        y_lab = None
+# =============================================================================
+#         y_lab = None
+# =============================================================================
         xs = ['inflow','outflow','totalflow']
         ys = ['log_{}'.format(c) for c in ['y2014','y2015','y2016']]
-    
+        ys = ['log_{}'.format(c) for c in ['y2014']]
+# =============================================================================
+#         ys = ['y2014']
+# =============================================================================
         df = pd.DataFrame()
         for x in xs:
             for y in ys:
-                corr=self.plot_scatter(self.df['istanbul'],x,y,x_lab,y_lab,has_best_fit=True)
+                corr=self.plot_scatter(self.df['istanbul'],x,y,x_lab,y_lab,has_best_fit=True,corr_loc=(51000,18))
                 df=df.append({'x':x,'y':y,'correlation':corr},ignore_index=True)
         df.sort_values('correlation',ascending=False,inplace=True)
         loc = '../results/{}'.format(self.name)
@@ -614,7 +708,7 @@ class FlowAndEconomicOutput(Result):
         ys = ['y2014','y2015','y2016']
         ys = ys + ['log_{}'.format(y_string) for y_string in ys]
         for y in ys:
-            self.run_regressions(df_index,cols,combinations,y)
+            self.run_regressions(df_index,cols,combinations,y,['Model 1','Model 2','Model 3','Model 4'],[],'flow_vs_gdp')
         
     def run_for_results(self):
         self.plot_results()
@@ -630,7 +724,10 @@ def read_areas():
 def read_poi():
     poi = pd.read_csv('../data/istanbul/attractiveness.csv')
     poi.rename(columns={'POLYGON_NM':'district_name'},inplace=True)
-    to_remove = ['MajHwys','SecHwys','Parking','RailRds']
+    to_remove = ['MajHwys','AutoSvc','CommSvc']
+# =============================================================================
+#     to_remove = ['MajHwys','SecHwys','Parking','RailRds']
+# =============================================================================
 # =============================================================================
 #     ['TrnsHubs','Hospitals','EduInst','FinInst','AutoSvc','CommSvc']
 # =============================================================================
@@ -665,8 +762,8 @@ def get_distance_ij():
     return dist
 
 
-def get_total_flows():
-    flow = get_flow_matrix(is_repeat=True)
+def get_total_flows(is_repeat):
+    flow = get_flow_matrix(is_repeat)
     #df = pd.merge(poi[['district_id','POI_sum','POI_diversity']],dist[])
     flow.rename(columns = {'hdistrict_id':'district_i','sdistrict_id':'district_j'},inplace=True)
     workflow = get_work_flow()
@@ -732,7 +829,7 @@ class HuffModel(Result):
     REMOVE_RANGE = 1
     name = 'huffmodel'
     def __init__(self):
-        totalflow = get_total_flows()       
+        totalflow = get_total_flows(is_repeat=True)       
         dist = get_distance_ij()
         poi = read_poi()
 # =============================================================================
@@ -758,12 +855,18 @@ class HuffModel(Result):
         self.poi = poi
         self.dist = dist
     
+    def plot_flow_diversity(self):
+        df = self.df
+        df['totalflow_thou'] = df.totalflow/1000
+        self.plot_scatter(df,'poi_diversity_0_j','totalflow_thou','Amenities Diversity', 'Total Volume of Flow (in Thousands)',has_best_fit=True,f_name='div_vs_flow')
     def run_for_results(self):
         self.plot_poi_bars()
         self.plot_flow_heatmap()
         self.plot_distance_heatmap()
+        self.plot_flow_diversity()
         self.run_glms()
         self.run_ols()
+        self.plot_indiv_fits()
     
     def add_glm_results(self,df_summary,y_series,reses):
         for res in reses:
@@ -829,17 +932,48 @@ class HuffModel(Result):
 # =============================================================================
             
  
+    def plot_indiv_fits(self):
+        location = '../results/{}/regressions/parameters'.format(self.name)
+        df_names = pd.read_csv('../data/istanbul/Istanbul_district_area.txt')[['district_id','district_name']]
+        
+        df_summary = pd.read_csv(os.path.join(location,'parameters_0.csv'))
+        df_summary = df_summary[df_summary.district_id!='average'].copy()
+        df_summary.district_id = df_summary.district_id.astype(int)
+        df_summary['log_geo_distance_ij'] = - df_summary['log_geo_distance_ij']
+        df_summary = pd.merge(df_summary,df_names,on='district_id',how='left')
+        cols = {'log_geo_poi_sum_0_j': 'Alpha','log_geo_poi_diversity_0_j':'Beta','log_geo_distance_ij':'Gamma','r2':'R Squared'}
+        
+        for col in cols:
+            self.plot_bar(df_summary, col, df_summary.district_name, cols[col], cols[col])
+        
         
     def run_ols(self):
+                    
+        def get_r2(chunk):
+            df_norm = chunk.copy()
+            error = (df_norm['totalflow_not_norm'] - df_norm['fitted_flow']) 
+            mse = (error*error).mean()
+            yavg = df_norm.totalflow_not_norm.mean()
+            error2 = df_norm['totalflow_not_norm']-yavg
+            mse2 = (error2*error2).mean()
+            return 1-(mse/mse2)
         
-# =============================================================================
-#         xs = ['poi_sum_j','poi_diversity_j','distance_ij']        
-# =============================================================================
+        def normalize_prob(chunk):
+            chunk = chunk.copy()
+            norm = chunk.prob.sum()
+            chunk.loc[:,'prob'] = chunk.prob/norm
+            chunk.loc[:,'fitted_flow'] = chunk.prob * (chunk.totalflow_not_norm.sum())
+            return chunk
+
+
         regs_global = []
         for n in range(self.REMOVE_RANGE):
+            
+
             df = self.df.copy()
             xs = ['poi_sum_{}_j'.format(n),'poi_diversity_{}_j'.format(n),'distance_ij']        
             def normalize_geo_log(chunk,xs):
+                
                 chunk = chunk.copy()
                 haszero = ((chunk.totalflow == 0).sum()) > 0
                 if haszero:
@@ -858,47 +992,59 @@ class HuffModel(Result):
             #need to deal with zeros
             y = 'log_geo_totalflow'
             xs2 = ['log_geo_{}'.format(x) for x in xs]
+            
+        
             df_params=pd.DataFrame()
             districts = []
             regs=[]
-# =============================================================================
-#             for i, chunk in df_norm.groupby('district_i'):
-#     
-#                 reg = self.regress(chunk,xs2,y,f_name='huff_ols_district_{}_{}'.format(i,n))
-#                 df_params = df_params.append(pd.DataFrame(reg.params).transpose())
-#                 districts.append('district_{}'.format(int(i)))
-#                 regs.append(reg)
-#             
-#             df_params = df_params.append(pd.DataFrame(df_params.mean()).transpose())
-#             districts.append('average')
-# =============================================================================
+            r2s=[]
+            for i, chunk in df_norm.groupby('district_i'):
+                chunk = chunk.copy()
+                reg = self.regress(chunk,xs2,y,f_name='huff_ols_{}'.format(n))
+                chunk['fitted_val']= reg.fittedvalues
+                chunk['prob'] = np.exp(reg.fittedvalues)
+                chunk = normalize_prob(chunk)
+                r2s.append(reg.rsquared)
+                df_params = df_params.append(pd.DataFrame(reg.params).transpose())
+                districts.append(int(i))
+                regs.append(reg)
             
-            reg = self.regress(df_norm,xs2,y,f_name='huff_ols_global_{}'.format(n))
-            regs_global.append(reg)
-            regs.append(reg)
-            df_params = df_params.append(pd.DataFrame(reg.params).transpose())
-            districts.append('global')
-            
+            df_params = df_params.append(pd.DataFrame(df_params.mean()).transpose())
+            districts.append('average')
             df_params['district_id'] = districts
-            self.write_regressions_summary(regs,'huff_{}'.format(n))
+            r2s.append(np.mean(r2s))
+            df_params['r2'] =r2s
+            self.write_regressions_summary(regs,[i for i in range(len(regs))],['Observations'],'huff_{}'.format(n))
             parameters_loc = '../results/{}/regressions/parameters'.format(self.name)
             create_dir(parameters_loc)
             df_params.to_csv(os.path.join(parameters_loc,'parameters_{}.csv').format(n))
+
+            reg = self.regress(df_norm,xs2,y,f_name='huff_ols_global_{}'.format(n))
+            regs_global.append(reg)
             
-  
-            def normalize_prob(chunk):
-                chunk = chunk.copy()
-                norm = chunk.prob.sum()
-                chunk.loc[:,'prob'] = chunk.prob/norm
-                chunk.loc[:,'fitted_flow'] = chunk.prob * (chunk.totalflow_not_norm.sum())
-                return chunk
+        
             df_norm.loc[:,'prob']=np.exp(reg.fittedvalues)
-            df_norm = df_norm.groupby('district_i').apply(normalize_prob)
+            df_norm['fitted_val']=reg.fittedvalues
+            df_norm = df_norm.groupby('district_i').apply(normalize_prob).reset_index(drop=True)
+            
+            
+            
                 
             
-            error = (df_norm['totalflow'] - df_norm['fitted_flow']) 
+            error = (df_norm['totalflow_not_norm'] - df_norm['fitted_flow']) 
             mean_square_error = np.sqrt((error*error).mean())
+            
+            mse = (error*error).mean()
+            yavg = df_norm.totalflow_not_norm.mean()
+            error2 = df_norm['totalflow_not_norm']-yavg
+            mse2 = (error2*error2).mean()
+            
+            print('r2',1-(mse/mse2))
             abs_error = abs(error).mean()
+            for s in ['totalflow_not_norm','fitted_flow']:
+                df_norm['log_{}'.format(s)]=np.log(df_norm[s])
+            self.plot_predicted(df_norm,'log_totalflow_not_norm','log_fitted_flow','log(Observed Flow)','log(Predicted Flow)',f_name='obs_vs_pred')
+
 
             
             location = '../results/{}/regressions/summary'.format(self.name)
@@ -906,21 +1052,21 @@ class HuffModel(Result):
             result_glm = self.run_glm(df_norm,xs2,y,family='gaussian')
             df_summary = self.add_glm_results(df_summary, df_norm[y], {'Gaussian':result_glm})
             df_summary.index = df_summary.Model
-            df_summary.loc['gaussian','Mean Absolute Error'] = abs_error
-            df_summary.loc['gaussian','Root Mean Squared Error'] = mean_square_error
+            df_summary.loc['Gaussian','Mean Absolute Error'] = abs_error
+            df_summary.loc['Gaussian','Root Mean Squared Error'] = mean_square_error
+                
+
             
-# =============================================================================
-#             df_summary.drop(['Mean Absolute Error','Root Mean Squared Error'],inplace=True)
-# =============================================================================
-            
-            col_arranged = ['Model','Pseudo R2', 'Residual Deviance','Df Residual', 'Intercept', 'Alpha','Beta', 'Gamma']
+            col_arranged = ['Model','Root Mean Squared Error','Pseudo R2', 'Residual Deviance','Df Residual', 'Intercept', 'Alpha','Beta', 'Gamma']
             df_summary = df_summary[col_arranged]
             df_summary.to_csv(os.path.join(location,'model_fit_summary.csv'),index=False)
             
             print(df_summary.to_latex(index=False),file=open(os.path.join(location,'model_fit_summary_latex.tex'),'w'))
-        self.write_regressions_summary(regs_global,'huff_globals'.format(n))
+# =============================================================================
+#         self.write_regressions_summary(regs_global,'huff_globals'
+# =============================================================================
         
-        
+        self.df_norm=df_norm
         
     def plot_poi_bars(self):
         title_mapper ={'AutoSvc' : 'Auto Services',
@@ -1042,12 +1188,74 @@ def get_bj_consumption_data():
      df.rename(columns={'districtID': 'district_id','numberofCustomers':'pop_rep','dEigen':'eigen_centrality','categoryEntropy':'consumption_diversity'},inplace=True)
      return df[['district_id','eigen_centrality','pop_rep','economy']]
  
+def get_coupon_shop():
+    coupon_shop = pd.read_csv('../data/beijing/coupon_shop.csv')
+    def strip(row):
+        
+        return row.coupon.split('/')[-1][:-5],row.shop.split('/')[-1]
+
+
+    coupon_shop['coupon_id'],coupon_shop['shop_id']=zip(*coupon_shop.apply(strip,1))
+    
+    coupon_shop.drop_duplicates(subset=['shop_id','coupon_id'],inplace=True)
+    num_shop = pd.DataFrame(coupon_shop.groupby('coupon_id')['shop_id'].nunique().rename('nshop'))
+    num_shop['is_rejected'] = num_shop.nshop > 1
+    coupon_shop = coupon_shop.join(num_shop[['is_rejected']],how='left',on='coupon_id')
+    coupon_shop = coupon_shop[~coupon_shop.is_rejected].copy()
+    
+    
+    return coupon_shop
+
+
+def get_transactions():
+    coup = []
+    customer = []
+    coupon= json.load(open('../data/beijing/bz_user_time.json', 'rb'))
+    for dt in coupon:
+        for key,value in coupon[dt].items():
+            customer.append(key.split('\t')[1])
+            coup.append(key.split('\t')[0])
+    df = pd.DataFrame(np.stack([coup,customer],1),columns = ['coupon_id','customer_id'])
+    
+    
+      
+    return df
+
+def get_bj_transactions():
+    
+    coupon_shop= get_coupon_shop()
+    df = get_transactions()
+    
+    df = pd.merge(df,coupon_shop,how='left',on='coupon_id')
+    df.dropna(subset=['shop_id'],inplace=True)
+    return df
+
+def get_bj_shop_info():
+    shop = json.load(open('../data/beijing/shop.json', 'rb'))
+    shop_df = pd.DataFrame.from_dict(shop,orient='index')[['num_sales','value_saled','category']].rename(columns={'value_saled':'sales_value'})
+    
+
+    shop_df_dis= pd.read_csv('../data/beijing/meituan_district_mapping.csv').rename(columns={'meituan_id':'shop_id','districtID':'district_id','districtName':'district_name'})
+    shop_df_dis = shop_df_dis.drop(columns=['economy','districtProvince', 'districtRegion'])
+    
+    shop_df_dis.shop_id = shop_df_dis.shop_id.astype(str)
+    
+    shop_df = shop_df_dis.join(shop_df,how='left',on='shop_id')
+    
+    #extra info
+# =============================================================================
+#     shop_dp_mapping= pd.read_csv('../data/beijing/datawithAllfeatures_sep.csv',sep='\t')
+# =============================================================================
+    return shop_df
+
 
 
 class SupplementaryChina(Result):
     name = 'supplementary_beijing'
     def __init__(self):
         self.df = pd.merge(get_bj_population_rent(),get_bj_consumption_data(),on='district_id',how='outer').dropna()
+        self.shop = get_bj_shop_info()
+        self.df_trans = get_bj_transactions()
         
     def get_population_plots(self):
         df = self.df
@@ -1055,117 +1263,135 @@ class SupplementaryChina(Result):
         self.plot_map(df,'pop_rep','Sample counts','sample')
         self.plot_scatter(df,'pop_rep','population','Sample Size','Population Size',has_best_fit=True,corr_loc= (500,50))
         
-        self.plot_bar(df, 'population', df.district_id.values,'Population (in thousands)','population')
-        self.plot_bar(df, 'popdse', df.district_id.values,'Density (in thousands/km2)','population_density')
+        self.plot_bar(df, 'population', ['' for _ in range(len(df))],'Population (in thousands)','population')
+        self.plot_bar(df, 'popdse', ['' for _ in range(len(df))],'Density (in thousands/km2)','population_density')
         
     def get_area_plots(self):
         df = self.df
         self.plot_map(df,'area_km2','Area (in km2)', 'area')
-        self.plot_bar(df,'area_km2',df.district_id,'Area (in km2)','area')
+        self.plot_bar(df,'area_km2',['' for _ in range(len(df))],'Area (in km2)','area')
     
     def get_house_price_plots(self):
         df = self.df
         self.plot_map(df,'hpi','Housing Price','houseprice')
         
     def run_for_results(self):
+        sns.set_style("whitegrid", {'axes.grid' : False})
         self.get_population_plots()
         self.get_area_plots()
         self.get_house_price_plots()
+        sns.set_style("whitegrid", {'axes.grid' : True})
+        self.plot_shop_categories()
+        self.plot_trans_summary()
+        self.plot_econ()
+    def plot_shop_categories(self):
+        df = pd.merge(self.df_trans,self.shop[['shop_id','category']],on='shop_id',how='left')
+        cat_bar = pd.DataFrame(df.category.value_counts().rename('count'))
+        cat_map = {
+            '火锅': 'Hot Pot', '小吃快餐' : 'Fast Food', '甜点饮品': 'Dessert', '川湘菜': 'Szechuan Cuisine',
+            '烧烤烤肉' : 'Barbeque', '日韩料理' : 'Japanese', '其他美食': 'Misc', '京菜鲁菜': 'Beijing Cuisine', '西餐': 'Western',
+       '自助餐':'Buffet', '东北菜' : 'Dongbei Cuisine', '海鲜':'Seafood', '粤港菜': 'Hongkong Cuisine', '西北菜': 'Xibei Cuisine', 
+       '江浙菜':'Jiangzhe Cuisine', '云贵菜': 'Yungui Cuisine', '新疆菜': 'Xinjiang cuisine' , '东南亚菜': 'South East Asian', '创意菜':'Fusion',
+       '农家乐': 'Rural'}
+        
+        cat_bar.index = [cat_map[c] for c in cat_bar.index]
+        
+        self.plot_bar(cat_bar,'count',cat_bar.index.values,'Number of Transactions per Category','beijing_trans_cat_count')
+    
+    def plot_trans_summary(self):
+        df = pd.merge(self.df_trans,self.shop[['shop_id','lat','lon','district_id']],on='shop_id',how='left')
+        districts = df.district_id.unique()
+        def get_trans_per_shop(chunk):
+            return pd.Series({'lat':chunk.lat.iloc[0],'lon':chunk.lon.iloc[0],'count':1})
+        trans_count = df.groupby('shop_id').apply(get_trans_per_shop)
+        trans_count.dropna(subset=['lat','lon'],inplace=True)
+        scale = 1
+        self.plot_bubble_map(trans_count, 'count', scale,districts, 'trans_count')
         
 
-
         
-#%%
         
-df = pd.read_csv('../data/beijing/dianping.csv')
-import json
+    def plot_econ(self):
+        df = pd.read_csv('../data/beijing/beijing_econ.csv')
+        df['log_econ'] = np.log(df.economy)
+        self.plot_map(df,'log_econ','Total Capital Assets (Log Scale)','econ')
 
 
-def getCoupon2shop():
-    data = pd.read_csv('../data/beijing/meituan1.csv', 'utf-8', delimiter = ',')
-    coupon2shop = {}
-    data.columns = range(16)
-    for i in range(len(data)):
-        try:
-            coupon2shop[int(data[11][i].split('/')[-1][:-5])] = int(data[14][i].split('/')[-1])
-        except:
-            pass
-    return coupon2shop
+class GrowthVsDiv(Result):
+    
+    name = 'growth'
+    
+    def __init__(self):
+        df = {}
+        df1 = pd.read_csv('../data/istanbul/istanbul_cc.csv')
+        df1 = df1.rename(columns={'delta1416p':'growth','HPI':'hpi','weightedEigenCentralityDist':'geo_centrality','UA':'ua'})
+        df['istanbul'] = df1
+        df1 = pd.read_csv('../data/beijing/beijing_cc.csv')
+        df1['log_econ'] = np.log(df1.economy)
+        df1 = df1.rename(columns={'logEcondse':'growth','HPI':'hpi','dEigen':'geo_centrality','categoryEntropy':'ua'})
+        df['beijing'] = df1
+        
+        df1= pd.read_csv('../data/usa/usa_cc.csv')
+        df1 = df1.rename(columns={'HPI':'hpi','geo':'geo_centrality','deltap':'growth','geoid':'district_id'})
+        df['usa'] = df1
+        self.df =df
+        
+        
 
-def getShop2idFreq(coupon2shop):
-    shop2idf={}
-    banlist=set()
-    coupon= json.load(open('../data/beijing/bz_user_time.json', 'rb'))
-    for dt in coupon:
-        for key,value in coupon[dt].items():
-            username=key.split('\t')[1]
-            print(value)
-            if value<=20:
-                couponname=int(key.split('\t')[0])
-                if couponname in coupon2shop:
-                    shopname=coupon2shop[couponname]
-                    if shopname not in shop2idf:
-                        shop2idf[shopname]={}
-                    if username not in shop2idf[shopname]:
-                        shop2idf[shopname][username]=0
-                    shop2idf[shopname][username]+=1
-            else:
-                banlist=banlist | set(username)
-        banlist=list(banlist)    
-        for key,value in shop2idf.iteritems():
-            for user in banlist:
-                if user in value:
-                    value.pop(user)        
-    return shop2idf#%%
+    def compare_regressions(self):
+        y = 'growth'
+        cols = ['ua','popdse','hpi','geo_centrality']
+        df_indexes = ['istanbul','beijing','usa']
+        combinations = [(0,1,2,3)]*3
+# =============================================================================
+#         for c  in df_indexes:
+#             self.df[c]= normalise_data(self.df[c][cols+[y,'district_id']],omit=['district_id'])
+#         self.run_regressions(df_indexes,cols,combinations,y)
+# =============================================================================
+        
+        for city in df_indexes:
+            df_idx = [city]*4
+            combinations = [(0,),(0,1),(0,1,2),(0,1,2,3)]
+            reg_order = cols + ['Intercept','Observations']
+            model_names = ['Model 1','Model 2','Model 3','Model 4']
+            self.run_regressions(df_idx,cols,combinations,y,model_names,reg_order,'control_{}'.format(city))
+# =============================================================================
+#         df_flow = read_in_out_diversity(is_repeat=True)
+#         df_flow = normalise_data(df_flow)
+#         self.df['istanbul'] = self.df['istanbul'].join(df_flow,on='district_id',how='left') 
+#         
+#         extra_cols= ['composite_demographic_inflow_entropy',
+#        'composite_demographic_inflow_num_unique',
+#        'composite_demographic_inflow_total']
+#         
+#         for extra_col in extra_cols:
+#             cols = [extra_col,'ua','popdse','hpi','geo_centrality']
+#             df_indexes = ['istanbul']*3
+#             combinations = [(0,),(0,2,3,4),(0,1,2,3,4)]
+#             self.run_regressions(df_indexes,cols,combinations,y,'extra_{}'.format(extra_col))
+#     
+# =============================================================================
+    def run_for_results(self):
+        self.compare_regressions()
+  
 
-shop2idf = getShop2idFreq(getCoupon2shop())
-#%%
+
+
+
 results=[]
 
 # =============================================================================
 # results.append(Supplementary())
-# =============================================================================
-# =============================================================================
 # results.append(HuffModel())
-# =============================================================================
-# =============================================================================
 # results.append(CommoditiesAndFlow())
-# =============================================================================
-# =============================================================================
 # results.append(FlowAndEconomicOutput())
 # =============================================================================
 results.append(SupplementaryChina())
+results.append(GrowthVsDiv())
 
 for result in results:
     result.run_for_results()
 
-#%%
-    
-
-#%%
-
-#functions for exploratory purposes SI
-
-
-def getHouseAndPopDseMap():
-    df=pd.read_csv("thesisData/beijing_cc.csv")
-    df2=pd.read_csv("yelp/istanbul_cc_n.csv")
-    df3=pd.read_csv("thesisData/usa_cc.csv")
-    x="popdse"
-    y="HPI"
-    df=df[df.HPI!=0]
-    mapCreate(df2,"istan_HPI",y)
-    mapCreate(df2,"istan_popdse",x)
-#==============================================================================
-#     plot(df3,x,y)
-#==============================================================================
-    
-    
-
-
 
     
-if __name__ == "__main__":
-    getHouseAndPopDseMap()
-    pass
 
