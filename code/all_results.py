@@ -1475,10 +1475,23 @@ class SupplementaryUSA(Result):
         self.plot_bubble_map(trans_count, 'count', scale,districts, 'trans_count')
         
     def run_for_results(self):
-        self.plot_maps()
-        self.plot_bars()
-        self.plot_shop_categories()
-        self.plot_trans_summary()
+# =============================================================================
+#         self.plot_maps()
+#         self.plot_bars()
+#         self.plot_shop_categories()
+#         self.plot_trans_summary()
+# =============================================================================
+        self.get_summaries()
+        
+    def get_summaries(self):
+        df = self.df
+        for col in ['population','area_km2','popdse']:
+            print('======{}====='.format(col))
+            print ('Min: {}'.format(df[col].min()))
+            print ('Mean: {}'.format(df[col].mean()))
+            print ('Median: {}'.format(df[col].median()))
+            print ('Max: {}'.format(df[col].max()))
+            print('\n\n')
 
 results=[]
 
