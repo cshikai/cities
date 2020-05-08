@@ -541,7 +541,7 @@ class Result(object):
             else:
                 corr_loc_x = kwargs['corr_loc'][0]
                 corr_loc_y = kwargs['corr_loc'][1]
-            plt.text(corr_loc_x,corr_loc_y,'Correlation : {}'.format(corr),size=15)
+            plt.text(corr_loc_x,corr_loc_y,'Correlation : {}'.format(np.round(corr,4)),size=15)
             plt.plot(np.unique(df[x].values), np.poly1d(np.polyfit(df[x].values, df[y].values, 1))(np.unique(df[x].values)))
         else:
             corr=0
@@ -728,7 +728,10 @@ class FlowAndEconomicOutput(Result):
         self.plot_results()
         self.get_regressions()
 
-
+def read_income_spend():
+    df = pd.read_csv('../data/istanbul/cc_vs_hh.csv')
+    df = df.rename(columns = {'Average household income for each district':'avg_income','Average transaction per customer sample in each district':'avg_spending'})
+    return df
 def read_areas():
     df = pd.read_csv('../data/istanbul/Istanbul_district_area.txt')
     df = df[~df.district_id.isin(EXCLUDE)]
@@ -1160,6 +1163,7 @@ class Supplementary(Result):
         df.sort_values(by='district_id',inplace=True)
         self.df['pop_36'] = df
         self.df['hpi']=get_hpi()
+        self.df['income_spending'] = read_income_spend()
     def get_population_plots(self):
         df = self.df['pop'].join(self.df['rep'],how='left')
         df['district_id'] = df.index
@@ -1180,10 +1184,16 @@ class Supplementary(Result):
         df = self.df['hpi']
         self.plot_map(df,'hpi','Rent Price','rent')
         
+    def plot_income_spending(self):
+        df = self.df['income_spending']
+        self.plot_scatter(df,'avg_spending','avg_income','Average Transaction','Average Income',True,f_name='cc_vs_hh',corr_loc=(8000,25))
+        
     def run_for_results(self):
         self.get_population_plots()
         self.get_area_plots()
         self.get_rent_plots()
+        self.plot_income_spending()
+        
         
 def get_bj_population_rent():
     df=pd.read_csv('../data/beijing/bj_pop.csv')[['districtID','Popu','Popu_float','Pop_Sum','Dens_Pob','Area_km2']]
@@ -1495,15 +1505,25 @@ class SupplementaryUSA(Result):
 
 results=[]
 
+results.append(Supplementary())
 # =============================================================================
-# results.append(Supplementary())
 # results.append(HuffModel())
 # results.append(CommoditiesAndFlow())
+# =============================================================================
+# =============================================================================
 # results.append(FlowAndEconomicOutput())
+# =============================================================================
+# =============================================================================
 # results.append(SupplementaryChina())
+# =============================================================================
+# =============================================================================
+# # =============================================================================
+# =============================================================================
 # results.append(GrowthVsDiv())
 # =============================================================================
-results.append(SupplementaryUSA())
+# =============================================================================
+# results.append(SupplementaryUSA())
+# =============================================================================
 
 for result in results:
     result.run_for_results()
